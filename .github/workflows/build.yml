@@ -3,39 +3,49 @@ on: [push, workflow_dispatch]
 
 jobs:
   build:
-    runs-on: ubuntu-22.04  # Using an older, stable version of Ubuntu
+    runs-on: ubuntu-22.04
     
     steps:
       - uses: actions/checkout@v2
 
-      # 1. Setup Python
+      # 1. Setup Java 17 (Required for Android builds)
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      # 2. Setup Python 3.10
       - name: Setup Python
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      # 2. Install Buildozer and Dependencies
-      - name: Install Dependencies
+      # 3. Install ONLY Essential Build Tools
+      # We removed the conflicting gstreamer/media libraries because
+      # Buildozer will download the correct Android versions itself.
+      - name: Install System Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential git ffmpeg libsdl2-dev libsdl2-image-dev \
-            libsdl2-mixer-dev libsdl2-ttf-dev libportmidi-dev libswscale-dev \
-            libavformat-dev libavcodec-dev zlib1g-dev libgstreamer1.0 \
-            gstreamer1.0-plugins-base gstreamer1.0-plugins-good libffi-dev \
-            libssl-dev autoconf libtool libtool-bin pkg-config cmake gettext \
-            autopoint libltdl-dev openjdk-17-jdk unzip
-            
-          # Install Buildozer and Cython manually
+            build-essential git ffmpeg unzip zip \
+            autoconf libtool pkg-config zlib1g-dev \
+            libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev \
+            libltdl-dev
+
+      # 4. Install Buildozer
+      - name: Install Buildozer
+        run: |
+          pip install --upgrade pip
           pip install buildozer cython==0.29.33
 
-      # 3. Build the APK (The Magic Command)
+      # 5. Build the APK (Debug Mode)
       - name: Build with Buildozer
         run: |
-          # Initialize buildozer (just in case)
+          # The 'yes' command automatically answers 'y' to license agreements
           yes | buildozer android debug
 
-      # 4. Upload the APK
+      # 6. Upload the APK
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
