@@ -5,6 +5,7 @@ import numpy as np
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
+from kivy.uix.scrollview import ScrollView
 from kivy.uix.image import Image
 from kivy.uix.button import Button
 from kivy.uix.textinput import TextInput
@@ -14,11 +15,14 @@ from kivy.clock import Clock
 from kivy.graphics.texture import Texture
 from kivy.core.window import Window
 from kivy.utils import get_color_from_hex, platform
+from kivy.metrics import dp, sp
 
 # --- CONFIGURATION ---
 PORT = 8080
 Window.size = (1280, 720)
-Window.clearcolor = get_color_from_hex("#0d0221") 
+Window.clearcolor = get_color_from_hex("#0b0f1a")
+if platform != "android":
+    Window.allow_resize = False
 
 if platform == "android":
     try:
@@ -31,13 +35,15 @@ if platform == "android":
         pass
 
 # --- NEON COLORS ---
-C_CYAN = get_color_from_hex("#00f3ff")
-C_PINK = get_color_from_hex("#bc13fe")
-C_YELLOW = get_color_from_hex("#f9d71c")
-C_GREEN = get_color_from_hex("#2ed573")
-C_RED = get_color_from_hex("#ff4757")
-C_DARK = (0.2, 0.2, 0.2, 1)
+C_CYAN = get_color_from_hex("#25f0ff")
+C_PINK = get_color_from_hex("#ff58c7")
+C_YELLOW = get_color_from_hex("#ffd24a")
+C_GREEN = get_color_from_hex("#30d981")
+C_RED = get_color_from_hex("#ff5b6b")
+C_DARK = (0.12, 0.12, 0.16, 1)
 C_WHITE = (1, 1, 1, 1)
+C_SCROLL_ACTIVE = get_color_from_hex("#3d4a63")
+C_SCROLL_INACTIVE = get_color_from_hex("#202738")
 
 # --- NETWORK SCANNER ---
 class NetworkScanner(threading.Thread):
@@ -102,83 +108,96 @@ class StrikerApp(App):
         self.active_dirs = set()
         self.last_turn = None
 
-        root = BoxLayout(orientation='vertical', padding=10, spacing=10)
+        root = BoxLayout(orientation='vertical', padding=dp(8), spacing=dp(8))
 
-        # === TOP: CONTROLS ===
-        top_panel = BoxLayout(orientation='vertical', size_hint_y=0.45, spacing=10)
+        # === TOP: CONTROLS (SCROLL) ===
+        controls_scroll = ScrollView(
+            size_hint_y=0.45,
+            do_scroll_x=False,
+            bar_width=dp(6),
+            bar_color=C_SCROLL_ACTIVE,
+            bar_inactive_color=C_SCROLL_INACTIVE,
+            scroll_type=["bars", "content"],
+        )
+        controls_panel = BoxLayout(orientation='vertical', size_hint_y=None, spacing=dp(8), padding=(dp(6), dp(6)))
+        controls_panel.bind(minimum_height=controls_panel.setter('height'))
         
         # 1. Header
-        header = BoxLayout(size_hint_y=None, height=40)
-        lbl = Label(text="NEXUS CORE", font_size=24, bold=True, color=C_CYAN, halign='left')
+        header = BoxLayout(size_hint_y=None, height=dp(40))
+        lbl = Label(text="NEXUS CORE", font_size=sp(22), bold=True, color=C_CYAN, halign='left')
         lbl.bind(size=lbl.setter('text_size'))
-        self.led = Button(background_normal='', background_color=C_RED, size_hint=(None, None), size=(20,20))
+        self.led = Button(background_normal='', background_color=C_RED, size_hint=(None, None), size=(dp(20), dp(20)))
         header.add_widget(lbl); header.add_widget(self.led)
-        top_panel.add_widget(header)
+        controls_panel.add_widget(header)
 
         # 2. Connection
-        conn_row = BoxLayout(size_hint_y=None, height=45, spacing=5)
+        conn_row = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
         self.txt_ip = TextInput(hint_text='ROBOT IP', multiline=False, 
-                                background_color=(0.2,0.2,0.2,1), foreground_color=C_WHITE)
+                    background_color=(0.15,0.18,0.22,1), foreground_color=C_WHITE,
+                    cursor_color=C_CYAN, hint_text_color=(0.6,0.6,0.6,1))
         
-        self.btn_scan = Button(text='SCAN', size_hint_x=0.3, bold=True,
-                               background_normal='', background_color=C_YELLOW, color=(0,0,0,1))
+        self.btn_scan = Button(text='SCAN', size_hint_x=0.32, bold=True,
+                       background_normal='', background_color=C_YELLOW, color=(0,0,0,1), font_size=sp(14))
         self.btn_scan.bind(on_press=self.scan_network)
         
-        self.btn_con = Button(text='CONNECT', size_hint_x=0.4, bold=True,
-                              background_normal='', background_color=C_RED, color=C_WHITE)
+        self.btn_con = Button(text='CONNECT', size_hint_x=0.42, bold=True,
+                      background_normal='', background_color=C_RED, color=C_WHITE, font_size=sp(14))
         self.btn_con.bind(on_press=self.toggle_connection)
         
         conn_row.add_widget(self.txt_ip); conn_row.add_widget(self.btn_scan); conn_row.add_widget(self.btn_con)
-        top_panel.add_widget(conn_row)
+        controls_panel.add_widget(conn_row)
 
-        cam_row = BoxLayout(size_hint_y=None, height=45, spacing=5)
+        cam_row = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
         self.txt_cam = TextInput(hint_text='CAMERA URL', multiline=False,
-                     background_color=(0.1,0.1,0.1,1), foreground_color=C_WHITE,
+                 background_color=(0.12,0.14,0.18,1), foreground_color=C_WHITE,
                      cursor_color=C_CYAN, hint_text_color=(0.5,0.5,0.5,1))
 
-        self.btn_cam = Button(text='START FEED', size_hint_x=0.3, bold=True,
-                      background_normal='', background_color=C_CYAN, color=(0,0,0,1))
+        self.btn_cam = Button(text='START FEED', size_hint_x=0.34, bold=True,
+                  background_normal='', background_color=C_CYAN, color=(0,0,0,1), font_size=sp(14))
         self.btn_cam.bind(on_press=self.toggle_video)
         cam_row.add_widget(self.txt_cam); cam_row.add_widget(self.btn_cam)
-        top_panel.add_widget(cam_row)
+        controls_panel.add_widget(cam_row)
 
         # 3. Speed
-        spd_row = BoxLayout(orientation='vertical', size_hint_y=None, height=60)
-        self.lbl_spd = Label(text="SPEED: 100%", bold=True, color=C_WHITE)
+        spd_row = BoxLayout(orientation='vertical', size_hint_y=None, height=dp(70))
+        self.lbl_spd = Label(text="SPEED: 100%", bold=True, color=C_WHITE, font_size=sp(14))
         self.slider = Slider(min=0, max=255, value=255)
         self.slider.bind(value=self.update_speed)
         spd_row.add_widget(self.lbl_spd); spd_row.add_widget(self.slider)
-        top_panel.add_widget(spd_row)
+        controls_panel.add_widget(spd_row)
 
         # 4. Kickers
-        lbl_k = Label(text="KICKERS", color=(0.5,0.5,0.5,1), size_hint_y=None, height=20, font_size=12)
-        top_panel.add_widget(lbl_k)
+        lbl_k = Label(text="KICKERS", color=(0.55,0.55,0.6,1), size_hint_y=None, height=dp(18), font_size=sp(12))
+        controls_panel.add_widget(lbl_k)
         
-        act_grid = GridLayout(cols=2, spacing=10, size_hint_y=None, height=100)
+        act_grid = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=dp(100))
         act_grid.add_widget(self.mk_act("PASS L", "N", C_PINK))
         act_grid.add_widget(self.mk_act("SHOOT L", "M", C_PINK))
         act_grid.add_widget(self.mk_act("PASS R", "P", C_CYAN))
         act_grid.add_widget(self.mk_act("SHOOT R", "K", C_CYAN))
-        top_panel.add_widget(act_grid)
+        controls_panel.add_widget(act_grid)
 
         # 5. Reset
-        btn_rst = Button(text="RESET SERVOS (X)", size_hint_y=None, height=30,
-                         background_normal='', background_color=(255,100,175,50), color=(0.5,0.5,0.5,1))
+        btn_rst = Button(text="RESET SERVOS (X)", size_hint_y=None, height=dp(36),
+                 background_normal='', background_color=(1,0.55,0.75,0.2), color=(0.75,0.75,0.8,1),
+                 font_size=sp(13))
         btn_rst.bind(on_press=lambda x: self.send_command("X", "Reset"))
-        top_panel.add_widget(btn_rst)
+        controls_panel.add_widget(btn_rst)
 
         # 6. Log
         self.log_box = TextInput(text="> SYSTEM READY...", readonly=True, 
-                                 background_color=get_color_from_hex("#382e44"), 
-                                 foreground_color=C_CYAN, font_size=12)
+                     background_color=get_color_from_hex("#1b2333"), 
+                     foreground_color=C_CYAN, font_size=sp(12))
         self.log_box.size_hint_y = None
-        self.log_box.height = 70
-        top_panel.add_widget(self.log_box)
+        self.log_box.height = dp(120)
+        controls_panel.add_widget(self.log_box)
+
+        controls_scroll.add_widget(controls_panel)
 
         # === BOTTOM: VIDEO + MOVEMENT ===
-        bottom_panel = BoxLayout(orientation='horizontal', size_hint_y=0.55, spacing=10)
+        bottom_panel = BoxLayout(orientation='horizontal', size_hint_y=0.55, spacing=dp(8))
 
-        left_move = BoxLayout(orientation='vertical', size_hint_x=0.18, spacing=10)
+        left_move = BoxLayout(orientation='vertical', size_hint_x=0.18, spacing=dp(8))
         left_move.add_widget(self.mk_move_btn("F", "F"))
         left_move.add_widget(self.mk_move_btn("B", "B"))
 
@@ -187,7 +206,7 @@ class StrikerApp(App):
         self.img_feed.color = (1,1,1,1)
         center_video.add_widget(self.img_feed)
 
-        right_move = BoxLayout(orientation='vertical', size_hint_x=0.18, spacing=10)
+        right_move = BoxLayout(orientation='vertical', size_hint_x=0.18, spacing=dp(8))
         right_move.add_widget(self.mk_move_btn("L", "L"))
         right_move.add_widget(self.mk_move_btn("R", "R"))
 
@@ -195,21 +214,21 @@ class StrikerApp(App):
         bottom_panel.add_widget(center_video)
         bottom_panel.add_widget(right_move)
 
-        root.add_widget(top_panel)
+        root.add_widget(controls_scroll)
         root.add_widget(bottom_panel)
         Clock.schedule_interval(self.update_video, 1.0/30.0)
         return root
 
     # --- UI HELPERS ---
     def mk_move_btn(self, txt, cmd):
-        b = Button(text=txt, font_size=32, bold=True, background_normal='', background_color=C_GREEN, color=C_WHITE)
+        b = Button(text=txt, font_size=sp(26), bold=True, background_normal='', background_color=C_GREEN, color=C_WHITE)
         b.bind(on_press=lambda x: self.set_dir(cmd, True))
         b.bind(on_release=lambda x: self.set_dir(cmd, False))
         return b
 
     def mk_act(self, txt, cmd, col):
         bg = (col[0], col[1], col[2], 0.15)  # Full opacity
-        b = Button(text=txt, font_size=16, bold=True, background_normal='', background_color=bg, color=col)
+        b = Button(text=txt, font_size=sp(14), bold=True, background_normal='', background_color=bg, color=col)
         b.bind(on_press=lambda x: self.send_command(cmd, txt))
         return b
 
