@@ -154,6 +154,9 @@ class RcCarControllerApp(App):
 		self._scan_running = False
 		self._last_vert = (None, 0)
 		self._last_horiz = (None, 0)
+		self._throttle_state = (None, 0)
+		self._steer_state = (None, 0)
+		self._last_dispatched = None
 		self._target_ratio = 16 / 9
 
 	def build(self):
@@ -168,11 +171,52 @@ class RcCarControllerApp(App):
 		root.bind(pos=lambda _i, _v: setattr(bg, "pos", root.pos))
 		root.bind(size=lambda _i, _v: setattr(bg, "size", root.size))
 
-		frame = FixedAspectFrame(aspect_ratio=self._target_ratio, size_hint=(1, 1))
-		root.add_widget(frame)
+		surface = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(10), size_hint=(1, 1))
+		root.add_widget(surface)
 
-		surface = BoxLayout(orientation="vertical", padding=dp(14), spacing=dp(10), size_hint=(None, None))
-		frame.set_content(surface)
+		main_row = BoxLayout(orientation="horizontal", spacing=dp(10), size_hint=(1, 1))
+		surface.add_widget(main_row)
+
+		left_controls = Card(
+			orientation="vertical",
+			spacing=dp(10),
+			padding=dp(10),
+			size_hint_x=0.34,
+			bg_color=(0.1, 0.15, 0.2, 1),
+		)
+		main_row.add_widget(left_controls)
+
+		throttle_pad = Card(orientation="vertical", spacing=dp(6), padding=dp(8), bg_color=(0.11, 0.18, 0.24, 1))
+		throttle_pad.add_widget(Label(text="Throttle (Up / Down)", bold=True, size_hint_y=None, height=dp(28), color=(0.8, 0.9, 0.98, 1), font_size=sp(14)))
+		left_joystick = Joystick(
+			on_move=self.on_joystick_move_vertical,
+			on_release=self.on_joystick_release_vertical,
+			axis="vertical",
+		)
+		throttle_pad.add_widget(left_joystick)
+		left_controls.add_widget(throttle_pad)
+
+		middle_panel = BoxLayout(orientation="vertical", spacing=dp(10), size_hint_x=0.32)
+		main_row.add_widget(middle_panel)
+
+		right_controls = Card(
+			orientation="vertical",
+			spacing=dp(10),
+			padding=dp(10),
+			size_hint_x=0.34,
+			bg_color=(0.1, 0.15, 0.2, 1),
+		)
+		main_row.add_widget(right_controls)
+
+		steer_pad = Card(orientation="vertical", spacing=dp(6), padding=dp(8), bg_color=(0.11, 0.18, 0.24, 1))
+		steer_pad.add_widget(Label(text="Steering (Left / Right)", bold=True, size_hint_y=None, height=dp(28), color=(0.8, 0.9, 0.98, 1), font_size=sp(14)))
+		right_joystick = Joystick(
+			on_move=self.on_joystick_move_horizontal,
+			on_release=self.on_joystick_release_horizontal,
+			axis="horizontal",
+		)
+		steer_pad.add_widget(right_joystick)
+		right_controls.add_widget(steer_pad)
 
 		header = Card(orientation="horizontal", spacing=dp(10), size_hint_y=None, height=dp(68), padding=(dp(14), dp(10)))
 		title_box = BoxLayout(orientation="vertical")
@@ -182,27 +226,14 @@ class RcCarControllerApp(App):
 			if isinstance(child, Label):
 				child.bind(size=child.setter("text_size"))
 		header.add_widget(title_box)
-		surface.add_widget(header)
+		middle_panel.add_widget(header)
 
-		top_bar = GridLayout(cols=4, spacing=dp(8), size_hint_y=None, height=dp(54))
-		extra_colors = [
-			(0.94, 0.4, 0.4, 1),
-			(0.35, 0.72, 0.98, 1),
-			(0.38, 0.82, 0.5, 1),
-			(0.95, 0.76, 0.32, 1),
-		]
-		for label, color in zip(["Extra 1", "Extra 2", "Extra 3", "Extra 4"], extra_colors):
-			btn = Button(text=label, bold=True, font_size=sp(14), background_normal="", background_color=color)
-			btn.bind(on_release=self.on_extra)
-			top_bar.add_widget(btn)
-		surface.add_widget(top_bar)
-
-		connect_panel = Card(orientation="vertical", spacing=dp(8), size_hint_y=None, height=dp(130), padding=dp(10))
+		connect_panel = Card(orientation="vertical", spacing=dp(8), size_hint_y=None, height=dp(132), padding=dp(10))
 		connect_row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(50))
 		self._ip_input = TextInput(
 			hint_text="Device IP",
 			multiline=False,
-			size_hint_x=0.55,
+			size_hint_x=0.52,
 			font_size=sp(16),
 			padding=(dp(10), dp(12)),
 			background_normal="",
@@ -214,7 +245,7 @@ class RcCarControllerApp(App):
 		self._port_input = TextInput(
 			hint_text="Port",
 			multiline=False,
-			size_hint_x=0.2,
+			size_hint_x=0.21,
 			input_filter="int",
 			text="8080",
 			font_size=sp(16),
@@ -225,7 +256,7 @@ class RcCarControllerApp(App):
 			foreground_color=(0.92, 0.96, 1, 1),
 			hint_text_color=(0.45, 0.62, 0.74, 1),
 		)
-		self._connect_btn = Button(text="Connect", size_hint_x=0.25, bold=True, font_size=sp(14), background_normal="", background_color=(0.2, 0.75, 0.62, 1))
+		self._connect_btn = Button(text="Connect", size_hint_x=0.27, bold=True, font_size=sp(14), background_normal="", background_color=(0.2, 0.75, 0.62, 1))
 		self._connect_btn.bind(on_release=self.on_connect)
 		connect_row.add_widget(self._ip_input)
 		connect_row.add_widget(self._port_input)
@@ -240,31 +271,24 @@ class RcCarControllerApp(App):
 		scan_row.add_widget(self._scan_btn)
 		scan_row.add_widget(self._status)
 		connect_panel.add_widget(scan_row)
-		surface.add_widget(connect_panel)
+		middle_panel.add_widget(connect_panel)
 
-		joystick_row = GridLayout(cols=2, spacing=dp(12), size_hint_y=1)
+		middle_panel.add_widget(Widget(size_hint_y=1))
 
-		left_pad = Card(orientation="vertical", spacing=dp(6), padding=dp(8), bg_color=(0.1, 0.15, 0.2, 1))
-		left_pad.add_widget(Label(text="Throttle (Up / Down)", bold=True, size_hint_y=None, height=dp(26), color=(0.8, 0.9, 0.98, 1), font_size=sp(14)))
-		left_joystick = Joystick(
-			on_move=self.on_joystick_move_vertical,
-			on_release=self.on_joystick_release_vertical,
-			axis="vertical",
-		)
-		left_pad.add_widget(left_joystick)
-
-		right_pad = Card(orientation="vertical", spacing=dp(6), padding=dp(8), bg_color=(0.1, 0.15, 0.2, 1))
-		right_pad.add_widget(Label(text="Steering (Left / Right)", bold=True, size_hint_y=None, height=dp(26), color=(0.8, 0.9, 0.98, 1), font_size=sp(14)))
-		right_joystick = Joystick(
-			on_move=self.on_joystick_move_horizontal,
-			on_release=self.on_joystick_release_horizontal,
-			axis="horizontal",
-		)
-		right_pad.add_widget(right_joystick)
-
-		joystick_row.add_widget(left_pad)
-		joystick_row.add_widget(right_pad)
-		surface.add_widget(joystick_row)
+		extra_bar = Card(orientation="vertical", spacing=dp(6), size_hint_y=None, height=dp(78), padding=(dp(10), dp(10)), bg_color=(0.12, 0.18, 0.25, 1))
+		extra_row = GridLayout(cols=4, spacing=dp(6), size_hint=(1, 1))
+		extra_colors = [
+			(0.94, 0.4, 0.4, 1),
+			(0.35, 0.72, 0.98, 1),
+			(0.38, 0.82, 0.5, 1),
+			(0.95, 0.76, 0.32, 1),
+		]
+		for label, color in zip(["Extra 1", "Extra 2", "Extra 3", "Extra 4"], extra_colors):
+			btn = Button(text=label, bold=True, font_size=sp(12), background_normal="", background_color=color)
+			btn.bind(on_release=self.on_extra)
+			extra_row.add_widget(btn)
+		extra_bar.add_widget(extra_row)
+		middle_panel.add_widget(extra_bar)
 
 		return root
 
@@ -344,32 +368,57 @@ class RcCarControllerApp(App):
 			if (direction, value) == (last_dir, last_val):
 				return
 			self._last_vert = (direction, value)
-			if direction is None:
-				self.send_command("THROTTLE:0")
-				return
-			self.send_command(f"THROTTLE:{direction}:{value}")
+			self._throttle_state = (direction, value)
+			self._dispatch_drive_commands()
 			return
 
 		last_dir, last_val = self._last_horiz
 		if (direction, value) == (last_dir, last_val):
 			return
 		self._last_horiz = (direction, value)
-		if direction is None:
-			self.send_command("STEER:0")
-			return
-		self.send_command(f"STEER:{direction}:{value}")
+		self._steer_state = (direction, value)
+		self._dispatch_drive_commands()
 
 	def _scale_analog(self, magnitude):
 		value = 110 + int(round(magnitude * (255 - 110)))
 		return min(max(value, 110), 255)
 
+	def _dispatch_drive_commands(self):
+		steer_dir, steer_val = self._steer_state
+		throttle_dir, throttle_val = self._throttle_state
+
+		commands = []
+		if steer_dir is None:
+			commands.append("STEER:0")
+		else:
+			commands.append(f"STEER:{steer_dir}:{steer_val}")
+
+		if steer_dir is not None:
+			commands.append("THROTTLE:0")
+		elif throttle_dir is None:
+			commands.append("THROTTLE:0")
+		else:
+			commands.append(f"THROTTLE:{throttle_dir}:{throttle_val}")
+
+		dispatch_key = tuple(commands)
+		if dispatch_key == self._last_dispatched:
+			return
+		self._last_dispatched = dispatch_key
+		self.send_commands(commands)
+
 	def send_command(self, command):
+		self.send_commands([command])
+
+	def send_commands(self, commands):
+		if not commands:
+			return
 		if not self.sock:
-			self._set_status(f"Not connected: {command}")
+			self._set_status(f"Not connected: {' | '.join(commands)}")
 			return
 		try:
-			self.sock.sendall((command + "\n").encode("ascii"))
-			self._set_status(f"Sent: {command}")
+			payload = "\n".join(commands) + "\n"
+			self.sock.sendall(payload.encode("ascii"))
+			self._set_status(f"Sent: {' | '.join(commands)}")
 		except OSError:
 			self._set_status("Connection lost")
 			self._close_socket()
@@ -504,6 +553,7 @@ class RcCarControllerApp(App):
 		Clock.schedule_once(lambda _dt: self._set_connected_ui(connected))
 
 	def _close_socket(self):
+		self._last_dispatched = None
 		if self.sock:
 			try:
 				self.sock.close()
