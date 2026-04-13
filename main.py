@@ -1,7 +1,5 @@
-import ipaddress
 import socket
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from kivy.app import App
 from kivy.clock import Clock
@@ -13,25 +11,35 @@ from kivy.uix.button import Button
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.label import Label
-from kivy.uix.textinput import TextInput
 from kivy.uix.widget import Widget
 from kivy.utils import platform
 
 
 class Card(BoxLayout):
-	def __init__(self, bg_color=(0.13, 0.18, 0.24, 1), radius=dp(14), **kwargs):
+	def __init__(self, bg_color=(0.13, 0.18, 0.24, 1), radius=dp(14), border_color=(0.36, 0.47, 0.72, 0.35), border_width=1.2, **kwargs):
 		super().__init__(**kwargs)
 		self._bg_color = bg_color
 		self._radius = radius
+		self._border_color = border_color
+		self._border_width = border_width
 		self._bg = None
+		self._border = None
 		with self.canvas.before:
+			Color(*self._border_color)
+			self._border = RoundedRectangle(pos=self.pos, size=self.size, radius=[self._radius] * 4)
 			Color(*self._bg_color)
 			self._bg = RoundedRectangle(pos=self.pos, size=self.size, radius=[self._radius] * 4)
 		self.bind(pos=self._update_bg, size=self._update_bg)
 
 	def _update_bg(self, *_args):
-		self._bg.pos = self.pos
-		self._bg.size = self.size
+		if self._border:
+			self._border.pos = self.pos
+			self._border.size = self.size
+		self._bg.pos = (self.x + self._border_width, self.y + self._border_width)
+		self._bg.size = (
+			max(self.width - 2 * self._border_width, 0),
+			max(self.height - 2 * self._border_width, 0),
+		)
 
 
 class FixedAspectFrame(FloatLayout):
@@ -69,7 +77,7 @@ class FixedAspectFrame(FloatLayout):
 
 
 class Joystick(Widget):
-	def __init__(self, on_move, on_release, axis="both", **kwargs):
+	def __init__(self, on_move, on_release, axis="both", base_color=(0.25, 0.41, 0.88, 1), knob_color=(0.88, 0.92, 1, 1), **kwargs):
 		super().__init__(**kwargs)
 		self._on_move = on_move
 		self._on_release = on_release
@@ -80,11 +88,13 @@ class Joystick(Widget):
 		self._knob_radius = 0
 		self._center = (0, 0)
 		self._knob_pos = (0, 0)
+		self._base_color = base_color
+		self._knob_color = knob_color
 
 		with self.canvas:
-			Color(0.12, 0.6, 0.68, 1)
+			Color(*self._base_color)
 			self._base = Ellipse()
-			Color(0.98, 0.8, 0.2, 1)
+			Color(*self._knob_color)
 			self._knob = Ellipse()
 
 		self.bind(pos=self._update_graphics, size=self._update_graphics)
@@ -145,34 +155,52 @@ class Joystick(Widget):
 class RcCarControllerApp(App):
 	def __init__(self, **kwargs):
 		super().__init__(**kwargs)
+		self._esp_ip = "192.168.4.1"
+		self._esp_port = 8080
 		self.sock = None
 		self._status = None
-		self._ip_input = None
-		self._port_input = None
-		self._connect_btn = None
-		self._scan_btn = None
-		self._scan_running = False
-		self._last_vert = (None, 0)
-		self._last_horiz = (None, 0)
-		self._throttle_state = (None, 0)
-		self._steer_state = (None, 0)
-		self._last_dispatched = None
+		self._cmd_status = None
+		self._encoder_status = None
+		self._connecting = False
+		self._reader_running = False
+		self._joy_x = 0
+		self._joy_y = 0
+		self._last_drive_cmd = None
+		self._axis_deadzone = 0.08
 		self._target_ratio = 16 / 9
 
 	def build(self):
 		self._setup_display_mode()
+		royal_blue = (0.26, 0.43, 0.93, 1)
+		royal_blue_dark = (0.18, 0.31, 0.72, 1)
+		royal_blue_soft = (0.36, 0.5, 0.94, 1)
+		grey_bg = (0.11, 0.13, 0.17, 1)
+		grey_card = (0.16, 0.19, 0.24, 1)
+		grey_panel = (0.2, 0.23, 0.29, 1)
+		grey_panel_alt = (0.23, 0.27, 0.34, 1)
+		text_primary = (0.93, 0.95, 0.99, 1)
+		text_secondary = (0.7, 0.77, 0.89, 1)
+
 		Window.softinput_mode = "below_target"
-		Window.clearcolor = (0.03, 0.06, 0.1, 1)
+		Window.clearcolor = grey_bg
 		root = FloatLayout()
 
 		with root.canvas.before:
-			Color(0.04, 0.08, 0.13, 1)
+			Color(*grey_bg)
 			bg = Rectangle(pos=root.pos, size=root.size)
 		root.bind(pos=lambda _i, _v: setattr(bg, "pos", root.pos))
 		root.bind(size=lambda _i, _v: setattr(bg, "size", root.size))
 
 		surface = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(10), size_hint=(1, 1))
 		root.add_widget(surface)
+
+		top_bar = Card(orientation="horizontal", size_hint_y=None, height=dp(46), padding=(dp(12), dp(8)), bg_color=grey_panel, border_color=(0.39, 0.53, 0.9, 0.5))
+		top_bar.add_widget(Label(text="NEXUS DRIVE", bold=True, color=text_primary, font_size=sp(16), halign="left", valign="middle"))
+		top_bar.add_widget(Label(text="Landscape Control Interface", color=text_secondary, font_size=sp(12), halign="right", valign="middle"))
+		for child in top_bar.children:
+			if isinstance(child, Label):
+				child.bind(size=child.setter("text_size"))
+		surface.add_widget(top_bar)
 
 		main_row = BoxLayout(orientation="horizontal", spacing=dp(10), size_hint=(1, 1))
 		surface.add_widget(main_row)
@@ -181,116 +209,119 @@ class RcCarControllerApp(App):
 			orientation="vertical",
 			spacing=dp(10),
 			padding=dp(10),
-			size_hint_x=0.34,
-			bg_color=(0.1, 0.15, 0.2, 1),
+			size_hint_x=0.35,
+			bg_color=grey_card,
 		)
 		main_row.add_widget(left_controls)
 
-		throttle_pad = Card(orientation="vertical", spacing=dp(6), padding=dp(8), bg_color=(0.11, 0.18, 0.24, 1))
-		throttle_pad.add_widget(Label(text="Throttle (Up / Down)", bold=True, size_hint_y=None, height=dp(28), color=(0.8, 0.9, 0.98, 1), font_size=sp(14)))
+		throttle_pad = Card(orientation="vertical", spacing=dp(6), padding=dp(8), bg_color=grey_panel_alt)
+		throttle_pad.add_widget(Label(text="Throttle (Up / Down)", bold=True, size_hint_y=None, height=dp(28), color=text_primary, font_size=sp(14)))
 		left_joystick = Joystick(
 			on_move=self.on_joystick_move_vertical,
 			on_release=self.on_joystick_release_vertical,
 			axis="vertical",
+			base_color=royal_blue_soft,
+			knob_color=(0.93, 0.95, 0.99, 1),
 		)
 		throttle_pad.add_widget(left_joystick)
 		left_controls.add_widget(throttle_pad)
 
-		middle_panel = BoxLayout(orientation="vertical", spacing=dp(10), size_hint_x=0.32)
-		main_row.add_widget(middle_panel)
+		center_column = BoxLayout(orientation="vertical", spacing=dp(10), size_hint_x=0.3)
+		main_row.add_widget(center_column)
+
+		center_status = Card(
+			orientation="vertical",
+			spacing=dp(10),
+			padding=dp(12),
+			size_hint=(1, 0.66),
+			bg_color=royal_blue_dark,
+			border_color=(0.72, 0.8, 1, 0.45),
+		)
+		center_status.add_widget(Label(text="Live Command", bold=True, size_hint_y=None, height=dp(30), color=text_primary, font_size=sp(15)))
+		self._cmd_status = Label(
+			text="(IDLE - waiting for command)",
+			halign="center",
+			valign="middle",
+			color=text_primary,
+			font_size=sp(14),
+		)
+		self._cmd_status.bind(size=self._cmd_status.setter("text_size"))
+		center_status.add_widget(self._cmd_status)
+		center_status.add_widget(Label(text="Format: (ESP command - meaning)", halign="center", valign="middle", color=(0.84, 0.89, 0.98, 1), font_size=sp(11), size_hint_y=None, height=dp(24)))
+		center_column.add_widget(center_status)
+
+		encoder_card = Card(
+			orientation="vertical",
+			spacing=dp(6),
+			padding=dp(10),
+			size_hint=(1, 0.34),
+			bg_color=grey_panel_alt,
+			border_color=(0.57, 0.68, 0.95, 0.5),
+		)
+		encoder_card.add_widget(Label(text="Encoder", bold=True, size_hint_y=None, height=dp(24), color=text_primary, font_size=sp(13)))
+		self._encoder_status = Label(
+			text="(E,0,0 - Left: 0 Right: 0)",
+			halign="center",
+			valign="middle",
+			color=text_secondary,
+			font_size=sp(12),
+		)
+		self._encoder_status.bind(size=self._encoder_status.setter("text_size"))
+		encoder_card.add_widget(self._encoder_status)
+		center_column.add_widget(encoder_card)
 
 		right_controls = Card(
 			orientation="vertical",
 			spacing=dp(10),
 			padding=dp(10),
-			size_hint_x=0.34,
-			bg_color=(0.1, 0.15, 0.2, 1),
+			size_hint_x=0.35,
+			bg_color=grey_card,
 		)
 		main_row.add_widget(right_controls)
 
-		steer_pad = Card(orientation="vertical", spacing=dp(6), padding=dp(8), bg_color=(0.11, 0.18, 0.24, 1))
-		steer_pad.add_widget(Label(text="Steering (Left / Right)", bold=True, size_hint_y=None, height=dp(28), color=(0.8, 0.9, 0.98, 1), font_size=sp(14)))
+		steer_pad = Card(orientation="vertical", spacing=dp(6), padding=dp(8), bg_color=grey_panel_alt)
+		steer_pad.add_widget(Label(text="Steering (Left / Right)", bold=True, size_hint_y=None, height=dp(28), color=text_primary, font_size=sp(14)))
 		right_joystick = Joystick(
 			on_move=self.on_joystick_move_horizontal,
 			on_release=self.on_joystick_release_horizontal,
 			axis="horizontal",
+			base_color=royal_blue_soft,
+			knob_color=(0.93, 0.95, 0.99, 1),
 		)
 		steer_pad.add_widget(right_joystick)
 		right_controls.add_widget(steer_pad)
 
-		header = Card(orientation="horizontal", spacing=dp(10), size_hint_y=None, height=dp(68), padding=(dp(14), dp(10)))
-		title_box = BoxLayout(orientation="vertical")
-		title_box.add_widget(Label(text="NEXUS DRIVE", bold=True, color=(0.85, 0.95, 1, 1), font_size=sp(22), halign="left", valign="middle"))
-		title_box.add_widget(Label(text="Touch controls • Fast scan • Mobile-first", color=(0.65, 0.8, 0.9, 1), font_size=sp(12), halign="left", valign="middle"))
-		for child in title_box.children:
-			if isinstance(child, Label):
-				child.bind(size=child.setter("text_size"))
-		header.add_widget(title_box)
-		middle_panel.add_widget(header)
-
-		connect_panel = Card(orientation="vertical", spacing=dp(8), size_hint_y=None, height=dp(132), padding=dp(10))
-		connect_row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(50))
-		self._ip_input = TextInput(
-			hint_text="Device IP",
-			multiline=False,
-			size_hint_x=0.52,
-			font_size=sp(16),
-			padding=(dp(10), dp(12)),
-			background_normal="",
-			background_active="",
-			background_color=(0.08, 0.12, 0.17, 1),
-			foreground_color=(0.92, 0.96, 1, 1),
-			hint_text_color=(0.45, 0.62, 0.74, 1),
-		)
-		self._port_input = TextInput(
-			hint_text="Port",
-			multiline=False,
-			size_hint_x=0.21,
-			input_filter="int",
-			text="8080",
-			font_size=sp(16),
-			padding=(dp(10), dp(12)),
-			background_normal="",
-			background_active="",
-			background_color=(0.08, 0.12, 0.17, 1),
-			foreground_color=(0.92, 0.96, 1, 1),
-			hint_text_color=(0.45, 0.62, 0.74, 1),
-		)
-		self._connect_btn = Button(text="Connect", size_hint_x=0.27, bold=True, font_size=sp(14), background_normal="", background_color=(0.2, 0.75, 0.62, 1))
-		self._connect_btn.bind(on_release=self.on_connect)
-		connect_row.add_widget(self._ip_input)
-		connect_row.add_widget(self._port_input)
-		connect_row.add_widget(self._connect_btn)
-		connect_panel.add_widget(connect_row)
-
-		scan_row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(46))
-		self._scan_btn = Button(text="Scan IP", size_hint_x=0.34, bold=True, font_size=sp(14), background_normal="", background_color=(0.35, 0.58, 0.95, 1))
-		self._scan_btn.bind(on_release=self.on_scan)
-		self._status = Label(text="Not connected", halign="left", valign="middle", color=(1, 0.78, 0.3, 1), font_size=sp(14))
+		bottom_panel = Card(orientation="vertical", spacing=dp(8), size_hint_y=None, height=dp(170), padding=dp(10), bg_color=grey_card)
+		self._status = Label(text="Waiting for ESP connection...", halign="left", valign="middle", color=text_secondary, font_size=sp(14), size_hint_y=None, height=dp(28))
 		self._status.bind(size=self._status.setter("text_size"))
-		scan_row.add_widget(self._scan_btn)
-		scan_row.add_widget(self._status)
-		connect_panel.add_widget(scan_row)
-		middle_panel.add_widget(connect_panel)
+		bottom_panel.add_widget(self._status)
 
-		middle_panel.add_widget(Widget(size_hint_y=1))
-
-		extra_bar = Card(orientation="vertical", spacing=dp(6), size_hint_y=None, height=dp(78), padding=(dp(10), dp(10)), bg_color=(0.12, 0.18, 0.25, 1))
-		extra_row = GridLayout(cols=4, spacing=dp(6), size_hint=(1, 1))
-		extra_colors = [
-			(0.94, 0.4, 0.4, 1),
-			(0.35, 0.72, 0.98, 1),
-			(0.38, 0.82, 0.5, 1),
-			(0.95, 0.76, 0.32, 1),
-		]
-		for label, color in zip(["Extra 1", "Extra 2", "Extra 3", "Extra 4"], extra_colors):
-			btn = Button(text=label, bold=True, font_size=sp(12), background_normal="", background_color=color)
+		primary_row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=0.52)
+		for label, command, color in [
+			("Kick L", "K1", royal_blue),
+			("RESET", "X", royal_blue_dark),
+			("Kick R", "K2", royal_blue),
+		]:
+			btn = Button(text=label, bold=True, font_size=sp(13), background_normal="", background_color=color)
+			btn.command = command
 			btn.bind(on_release=self.on_extra)
-			extra_row.add_widget(btn)
-		extra_bar.add_widget(extra_row)
-		middle_panel.add_widget(extra_bar)
+			primary_row.add_widget(btn)
+		bottom_panel.add_widget(primary_row)
+
+		aux_row = GridLayout(cols=4, spacing=dp(8), size_hint_y=0.48)
+		for label, command in [("B1", "B1"), ("B2", "B2"), ("B3", "B3"), ("B4", "B4")]:
+			btn = Button(text=label, bold=True, font_size=sp(12), background_normal="", background_color=grey_panel)
+			btn.command = command
+			btn.bind(on_release=self.on_extra)
+			aux_row.add_widget(btn)
+		bottom_panel.add_widget(aux_row)
+		surface.add_widget(bottom_panel)
 
 		return root
+
+	def on_start(self):
+		self._schedule_connect_attempt()
+		Clock.schedule_interval(self._auto_connect_tick, 1.5)
 
 	def _setup_display_mode(self):
 		if platform == "android":
@@ -299,7 +330,7 @@ class RcCarControllerApp(App):
 				PythonActivity = autoclass("org.kivy.android.PythonActivity")
 				ActivityInfo = autoclass("android.content.pm.ActivityInfo")
 				activity = PythonActivity.mActivity
-				activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE)
+				activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE)
 			except Exception:
 				pass
 		else:
@@ -308,259 +339,202 @@ class RcCarControllerApp(App):
 			if Window.width / max(Window.height, 1) != self._target_ratio:
 				Window.size = (1280, 720)
 
-	def on_connect(self, _instance):
-		if self.sock:
-			self._close_socket()
-			self._set_status("Disconnected")
-			return
+	def _auto_connect_tick(self, _dt):
+		self._schedule_connect_attempt()
 
-		ip = self._ip_input.text.strip()
-		port = self._get_port()
-		if not ip:
-			self._set_status("Enter an IP to connect")
+	def _schedule_connect_attempt(self):
+		if self.sock or self._connecting:
 			return
-		if port is None:
-			return
-
-		threading.Thread(target=self._connect_worker, args=(ip, port), daemon=True).start()
-
-	def on_scan(self, _instance):
-		if self._scan_running:
-			self._set_status("Scan already running")
-			return
-		port = self._get_port()
-		if port is None:
-			return
-
-		self._scan_running = True
-		self._set_status("Scanning local network...")
-		threading.Thread(target=self._scan_worker, args=(port,), daemon=True).start()
+		self._connecting = True
+		self._set_status(f"Connecting to {self._esp_ip}:{self._esp_port}...")
+		threading.Thread(target=self._connect_worker, daemon=True).start()
 
 	def on_extra(self, instance):
-		command = instance.text.upper().replace(" ", "_")
+		command = getattr(instance, "command", instance.text.strip().upper())
 		self.send_command(command)
 
 	def on_joystick_move_vertical(self, _dx, dy, magnitude):
-		if magnitude < 0.15:
-			self._update_direction("vertical", None, 0)
+		if magnitude < self._axis_deadzone:
+			self._update_axis("y", 0)
 			return
-		direction = "FRONT" if dy > 0 else "BACK"
-		value = self._scale_analog(magnitude)
-		self._update_direction("vertical", direction, value)
+		value = self._scale_axis_signed(dy, magnitude)
+		self._update_axis("y", value)
 
 	def on_joystick_release_vertical(self):
-		self._update_direction("vertical", None, 0)
+		self._update_axis("y", 0)
 
 	def on_joystick_move_horizontal(self, dx, _dy, magnitude):
-		if magnitude < 0.15:
-			self._update_direction("horizontal", None, 0)
+		if magnitude < self._axis_deadzone:
+			self._update_axis("x", 0)
 			return
-		direction = "RIGHT" if dx > 0 else "LEFT"
-		value = self._scale_analog(magnitude)
-		self._update_direction("horizontal", direction, value)
+		value = self._scale_axis_signed(dx, magnitude)
+		self._update_axis("x", value)
 
 	def on_joystick_release_horizontal(self):
-		self._update_direction("horizontal", None, 0)
+		self._update_axis("x", 0)
 
-	def _update_direction(self, axis, direction, value):
-		if axis == "vertical":
-			last_dir, last_val = self._last_vert
-			if (direction, value) == (last_dir, last_val):
+	def _update_axis(self, axis, value):
+		if axis == "x":
+			if value == self._joy_x:
 				return
-			self._last_vert = (direction, value)
-			self._throttle_state = (direction, value)
-			self._dispatch_drive_commands()
-			return
-
-		last_dir, last_val = self._last_horiz
-		if (direction, value) == (last_dir, last_val):
-			return
-		self._last_horiz = (direction, value)
-		self._steer_state = (direction, value)
-		self._dispatch_drive_commands()
-
-	def _scale_analog(self, magnitude):
-		value = 110 + int(round(magnitude * (255 - 110)))
-		return min(max(value, 110), 255)
-
-	def _dispatch_drive_commands(self):
-		steer_dir, steer_val = self._steer_state
-		throttle_dir, throttle_val = self._throttle_state
-
-		commands = []
-		if steer_dir is None:
-			commands.append("STEER:0")
+			self._joy_x = value
 		else:
-			commands.append(f"STEER:{steer_dir}:{steer_val}")
+			if value == self._joy_y:
+				return
+			self._joy_y = value
+		self._dispatch_drive_command()
 
-		if steer_dir is not None:
-			commands.append("THROTTLE:0")
-		elif throttle_dir is None:
-			commands.append("THROTTLE:0")
-		else:
-			commands.append(f"THROTTLE:{throttle_dir}:{throttle_val}")
+	def _scale_axis_signed(self, component, magnitude):
+		if magnitude < self._axis_deadzone:
+			return 0
+		effective = (min(max(magnitude, self._axis_deadzone), 1.0) - self._axis_deadzone) / (1.0 - self._axis_deadzone)
+		val = 55 + int(round(effective * 200))
+		val = min(max(val, 55), 255)
+		return val if component >= 0 else -val
 
-		dispatch_key = tuple(commands)
-		if dispatch_key == self._last_dispatched:
+	def _dispatch_drive_command(self):
+		if not self.sock:
 			return
-		self._last_dispatched = dispatch_key
-		self.send_commands(commands)
+		command = f"J{self._joy_x},{self._joy_y}"
+		if command == self._last_drive_cmd:
+			return
+		self._last_drive_cmd = command
+		self.send_commands([command], show_sent=False)
 
 	def send_command(self, command):
 		self.send_commands([command])
 
-	def send_commands(self, commands):
+	def send_commands(self, commands, show_sent=True):
 		if not commands:
 			return
+		self._set_command_status(commands[-1])
 		if not self.sock:
 			self._set_status(f"Not connected: {' | '.join(commands)}")
 			return
 		try:
 			payload = "\n".join(commands) + "\n"
 			self.sock.sendall(payload.encode("ascii"))
-			self._set_status(f"Sent: {' | '.join(commands)}")
+			if show_sent:
+				self._set_status(f"Sent: {' | '.join(commands)}")
 		except OSError:
 			self._set_status("Connection lost")
 			self._close_socket()
 
-	def _connect_worker(self, ip, port):
-		self._set_status_threadsafe(f"Connecting to {ip}:{port}...")
+	def _set_command_status(self, command):
+		if self._cmd_status:
+			meaning = self._command_meaning(command)
+			self._cmd_status.text = f"({command} - {meaning})"
+
+	def _command_meaning(self, command):
+		if command.startswith("J"):
+			payload = command[1:]
+			parts = payload.split(",", 1)
+			if len(parts) == 2:
+				try:
+					x_val = int(parts[0])
+					y_val = int(parts[1])
+				except ValueError:
+					return "Drive malformed"
+				steer = "Right" if x_val > 0 else "Left" if x_val < 0 else "Center"
+				throttle = "Forward" if y_val > 0 else "Reverse" if y_val < 0 else "Stop"
+				return f"Drive {throttle} Y={y_val}, steer {steer} X={x_val}"
+			return "Drive malformed"
+
+		mapping = {
+			"K1": "Kick left servo",
+			"K2": "Kick right servo",
+			"B1": "Aux button 1",
+			"B2": "Aux button 2",
+			"B3": "Aux button 3",
+			"B4": "Aux button 4",
+			"X": "Emergency reset/stop",
+		}
+		return mapping.get(command, "Unknown command")
+
+	def _connect_worker(self):
 		try:
-			sock = socket.create_connection((ip, port), timeout=3)
+			sock = socket.create_connection((self._esp_ip, self._esp_port), timeout=2)
+			sock.settimeout(0.35)
 		except OSError:
-			self._set_status_threadsafe("Connect failed")
-			self._set_connected_ui_threadsafe(False)
+			self._set_status_threadsafe("Waiting for ESP AP...")
+			self._connecting = False
 			return
 
 		self._close_socket()
 		self.sock = sock
-		self._set_status_threadsafe(f"Connected to {ip}:{port}")
-		self._set_connected_ui_threadsafe(True)
+		self._set_status_threadsafe(f"Connected to {self._esp_ip}:{self._esp_port}")
+		self._start_socket_reader()
+		self._connecting = False
 
-	def _scan_worker(self, port):
-		try:
-			local_ip = self._get_local_ip()
-			if not local_ip:
-				self._set_status_threadsafe("Unable to get local IP")
+	def _start_socket_reader(self):
+		if self._reader_running:
+			return
+		self._reader_running = True
+		threading.Thread(target=self._socket_reader_worker, daemon=True).start()
+
+	def _socket_reader_worker(self):
+		buffer = ""
+		while self.sock:
+			try:
+				chunk = self.sock.recv(256)
+				if not chunk:
+					break
+				buffer += chunk.decode("ascii", errors="ignore")
+				while "\n" in buffer:
+					line, buffer = buffer.split("\n", 1)
+					self._handle_incoming_line(line.strip())
+			except socket.timeout:
+				continue
+			except OSError:
+				break
+
+		self._reader_running = False
+		if self.sock:
+			self._set_status_threadsafe("Connection lost")
+			Clock.schedule_once(lambda _dt: self._close_socket())
+
+	def _handle_incoming_line(self, line):
+		if not line:
+			return
+		if line.startswith("E,"):
+			parts = line.split(",", 2)
+			if len(parts) != 3:
 				return
+			try:
+				left = int(parts[1])
+				right = int(parts[2])
+			except ValueError:
+				return
+			Clock.schedule_once(lambda _dt: self._update_encoder_status(left, right))
 
-			network = ipaddress.IPv4Network(f"{local_ip}/24", strict=False)
-			found = []
-
-			def probe(host):
-				try:
-					sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-					sock.settimeout(0.25)
-					result = sock.connect_ex((str(host), port))
-					sock.close()
-					return result == 0
-				except OSError:
-					return False
-
-			def probe_udp(host):
-				try:
-					sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-					sock.settimeout(0.4)
-					sock.sendto(b"PING", (str(host), port))
-					sock.recvfrom(64)
-					sock.close()
-					return True
-				except OSError:
-					return False
-
-			hosts = [host for host in network.hosts() if str(host) != local_ip]
-
-			with ThreadPoolExecutor(max_workers=64) as executor:
-				futures = {executor.submit(probe, host): host for host in hosts}
-				for future in as_completed(futures):
-					if future.result():
-						found.append(str(futures[future]))
-
-			if not found:
-				self._set_status_threadsafe("No TCP devices found, trying UDP...")
-				with ThreadPoolExecutor(max_workers=64) as executor:
-					futures = {executor.submit(probe_udp, host): host for host in hosts}
-					for future in as_completed(futures):
-						if future.result():
-							found.append(str(futures[future]))
-
-			if found:
-				first_ip = found[0]
-				self._set_status_threadsafe(f"Found: {', '.join(found[:5])}")
-				Clock.schedule_once(lambda _dt: setattr(self._ip_input, "text", first_ip))
-			else:
-				self._set_status_threadsafe("No devices found")
-		except Exception:
-			self._set_status_threadsafe("Scan failed")
-		finally:
-			self._scan_running = False
-
-	def _get_local_ip(self):
-		try:
-			sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-			sock.connect(("10.255.255.255", 1))
-			local_ip = sock.getsockname()[0]
-			sock.close()
-			if local_ip and not local_ip.startswith("127."):
-				return local_ip
-		except OSError:
-			pass
-
-		try:
-			return socket.gethostbyname(socket.gethostname())
-		except OSError:
-			return None
-
-	def _get_port(self):
-		text = self._port_input.text.strip()
-		if not text:
-			self._set_status("Enter a port")
-			return None
-		try:
-			port = int(text)
-		except ValueError:
-			self._set_status("Port must be a number")
-			return None
-		if port <= 0 or port > 65535:
-			self._set_status("Port out of range")
-			return None
-		return port
+	def _update_encoder_status(self, left, right):
+		if self._encoder_status:
+			self._encoder_status.text = f"(E,{left},{right} - Left: {left} Right: {right})"
 
 	def _set_status(self, message):
 		if self._status:
 			self._status.text = message
 			lower = message.lower()
 			if "connected" in lower or "found" in lower or "sent" in lower:
-				self._status.color = (0.42, 0.95, 0.58, 1)
+				self._status.color = (0.71, 0.8, 0.97, 1)
 			elif "scan" in lower or "trying" in lower or "connecting" in lower:
-				self._status.color = (1, 0.8, 0.35, 1)
+				self._status.color = (0.84, 0.89, 0.98, 1)
 			else:
-				self._status.color = (1, 0.45, 0.45, 1)
+				self._status.color = (0.73, 0.79, 0.9, 1)
 
 	def _set_status_threadsafe(self, message):
 		Clock.schedule_once(lambda _dt: self._set_status(message))
 
-	def _set_connected_ui(self, connected):
-		if self._connect_btn:
-			if connected:
-				self._connect_btn.text = "Disconnect"
-				self._connect_btn.background_color = (0.95, 0.45, 0.43, 1)
-			else:
-				self._connect_btn.text = "Connect"
-				self._connect_btn.background_color = (0.2, 0.75, 0.62, 1)
-
-	def _set_connected_ui_threadsafe(self, connected):
-		Clock.schedule_once(lambda _dt: self._set_connected_ui(connected))
-
 	def _close_socket(self):
-		self._last_dispatched = None
+		self._last_drive_cmd = None
+		self._reader_running = False
 		if self.sock:
 			try:
 				self.sock.close()
 			except OSError:
 				pass
 			self.sock = None
-		self._set_connected_ui_threadsafe(False)
+		self._connecting = False
 
 
 if __name__ == "__main__":
