@@ -52,6 +52,9 @@ class FixedAspectFrame(FloatLayout):
 	def set_content(self, widget):
 		if self.content is not None:
 			self.remove_widget(self.content)
+		# Force manual sizing/centering from this frame (not parent size_hint rules).
+		widget.size_hint = (None, None)
+		widget.pos_hint = {}
 		self.content = widget
 		self.add_widget(widget)
 		self._layout_content()
@@ -172,9 +175,15 @@ class RcCarControllerApp(App):
 		self._top_bar = None
 		self._main_row = None
 		self._center_column = None
+		self._left_controls = None
+		self._right_controls = None
 		self._center_status_card = None
 		self._encoder_card = None
 		self._bottom_panel = None
+		self._primary_row = None
+		self._aux_row = None
+		self._primary_buttons = []
+		self._aux_buttons = []
 		self._responsive_fonts = []
 		self._responsive_heights = []
 
@@ -202,7 +211,7 @@ class RcCarControllerApp(App):
 		root.bind(pos=lambda _i, _v: setattr(bg, "pos", root.pos))
 		root.bind(size=lambda _i, _v: setattr(bg, "size", root.size))
 
-		surface = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(10), size_hint=(1, 1))
+		surface = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(10), size_hint=(None, None))
 		viewport.set_content(surface)
 		self._surface = surface
 
@@ -210,16 +219,15 @@ class RcCarControllerApp(App):
 		self._top_bar = top_bar
 		title_label = Label(text="NEXUS DRIVE", bold=True, color=text_primary, font_size=sp(16), halign="left", valign="middle")
 		subtitle_label = Label(text="Landscape Control Interface", color=text_secondary, font_size=sp(12), halign="right", valign="middle")
+		self._configure_single_line_label(title_label)
+		self._configure_single_line_label(subtitle_label)
 		top_bar.add_widget(title_label)
 		top_bar.add_widget(subtitle_label)
-		for child in top_bar.children:
-			if isinstance(child, Label):
-				child.bind(size=child.setter("text_size"))
 		self._register_responsive_font(title_label, 16)
 		self._register_responsive_font(subtitle_label, 12)
 		surface.add_widget(top_bar)
 
-		main_row = BoxLayout(orientation="horizontal", spacing=dp(10), size_hint_y=0.62)
+		main_row = BoxLayout(orientation="horizontal", spacing=dp(10), size_hint_y=0.59)
 		self._main_row = main_row
 		surface.add_widget(main_row)
 
@@ -227,13 +235,15 @@ class RcCarControllerApp(App):
 			orientation="vertical",
 			spacing=dp(10),
 			padding=dp(10),
-			size_hint_x=0.35,
+			size_hint_x=0.33,
 			bg_color=grey_card,
 		)
+		self._left_controls = left_controls
 		main_row.add_widget(left_controls)
 
 		throttle_pad = Card(orientation="vertical", spacing=dp(6), padding=dp(8), bg_color=grey_panel_alt)
 		throttle_label = Label(text="Throttle (Up / Down)", bold=True, size_hint_y=None, height=dp(28), color=text_primary, font_size=sp(14))
+		self._configure_single_line_label(throttle_label)
 		throttle_pad.add_widget(throttle_label)
 		self._register_responsive_font(throttle_label, 14)
 		self._register_responsive_height(throttle_label, 28)
@@ -247,7 +257,7 @@ class RcCarControllerApp(App):
 		throttle_pad.add_widget(left_joystick)
 		left_controls.add_widget(throttle_pad)
 
-		center_column = BoxLayout(orientation="vertical", spacing=dp(10), size_hint_x=0.3)
+		center_column = BoxLayout(orientation="vertical", spacing=dp(10), size_hint_x=0.34)
 		self._center_column = center_column
 		main_row.add_widget(center_column)
 
@@ -261,6 +271,7 @@ class RcCarControllerApp(App):
 		)
 		self._center_status_card = center_status
 		live_command_label = Label(text="Live Command", bold=True, size_hint_y=None, height=dp(30), color=text_primary, font_size=sp(15))
+		self._configure_single_line_label(live_command_label)
 		center_status.add_widget(live_command_label)
 		self._register_responsive_font(live_command_label, 15)
 		self._register_responsive_height(live_command_label, 30)
@@ -275,6 +286,7 @@ class RcCarControllerApp(App):
 		self._register_responsive_font(self._cmd_status, 14)
 		center_status.add_widget(self._cmd_status)
 		format_label = Label(text="Format: (ESP command - meaning)", halign="center", valign="middle", color=(0.84, 0.89, 0.98, 1), font_size=sp(11), size_hint_y=None, height=dp(24))
+		self._configure_single_line_label(format_label)
 		center_status.add_widget(format_label)
 		self._register_responsive_font(format_label, 11)
 		self._register_responsive_height(format_label, 24)
@@ -290,6 +302,7 @@ class RcCarControllerApp(App):
 		)
 		self._encoder_card = encoder_card
 		encoder_title = Label(text="Encoder", bold=True, size_hint_y=None, height=dp(24), color=text_primary, font_size=sp(13))
+		self._configure_single_line_label(encoder_title)
 		encoder_card.add_widget(encoder_title)
 		self._register_responsive_font(encoder_title, 13)
 		self._register_responsive_height(encoder_title, 24)
@@ -309,13 +322,15 @@ class RcCarControllerApp(App):
 			orientation="vertical",
 			spacing=dp(10),
 			padding=dp(10),
-			size_hint_x=0.35,
+			size_hint_x=0.33,
 			bg_color=grey_card,
 		)
+		self._right_controls = right_controls
 		main_row.add_widget(right_controls)
 
 		steer_pad = Card(orientation="vertical", spacing=dp(6), padding=dp(8), bg_color=grey_panel_alt)
 		steering_label = Label(text="Steering (Left / Right)", bold=True, size_hint_y=None, height=dp(28), color=text_primary, font_size=sp(14))
+		self._configure_single_line_label(steering_label)
 		steer_pad.add_widget(steering_label)
 		self._register_responsive_font(steering_label, 14)
 		self._register_responsive_height(steering_label, 28)
@@ -329,15 +344,17 @@ class RcCarControllerApp(App):
 		steer_pad.add_widget(right_joystick)
 		right_controls.add_widget(steer_pad)
 
-		bottom_panel = Card(orientation="vertical", spacing=dp(8), size_hint_y=0.28, padding=dp(10), bg_color=grey_card)
+		bottom_panel = Card(orientation="vertical", spacing=dp(8), size_hint_y=0.31, padding=dp(10), bg_color=grey_card)
 		self._bottom_panel = bottom_panel
 		self._status = Label(text="Waiting for ESP connection...", halign="left", valign="middle", color=text_secondary, font_size=sp(14), size_hint_y=None, height=dp(28))
+		self._configure_single_line_label(self._status)
 		self._status.bind(size=self._status.setter("text_size"))
 		self._register_responsive_font(self._status, 14)
 		self._register_responsive_height(self._status, 28)
 		bottom_panel.add_widget(self._status)
 
-		primary_row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=0.52)
+		primary_row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=0.54)
+		self._primary_row = primary_row
 		for label, command, color in [
 			("Kick L", "K1", royal_blue),
 			("RESET", "X", royal_blue_dark),
@@ -345,15 +362,18 @@ class RcCarControllerApp(App):
 		]:
 			btn = Button(text=label, bold=True, font_size=sp(13), background_normal="", background_color=color)
 			self._register_responsive_font(btn, 13)
+			self._primary_buttons.append(btn)
 			btn.command = command
 			btn.bind(on_release=self.on_extra)
 			primary_row.add_widget(btn)
 		bottom_panel.add_widget(primary_row)
 
-		aux_row = GridLayout(cols=4, spacing=dp(8), size_hint_y=0.48)
+		aux_row = GridLayout(cols=4, spacing=dp(8), size_hint_y=0.46)
+		self._aux_row = aux_row
 		for label, command in [("B1", "B1"), ("B2", "B2"), ("B3", "B3"), ("B4", "B4")]:
 			btn = Button(text=label, bold=True, font_size=sp(12), background_normal="", background_color=grey_panel)
 			self._register_responsive_font(btn, 12)
+			self._aux_buttons.append(btn)
 			btn.command = command
 			btn.bind(on_release=self.on_extra)
 			aux_row.add_widget(btn)
@@ -371,6 +391,12 @@ class RcCarControllerApp(App):
 	def _register_responsive_height(self, widget, base_height):
 		self._responsive_heights.append((widget, base_height))
 
+	def _configure_single_line_label(self, label):
+		label.shorten = True
+		label.shorten_from = "right"
+		label.max_lines = 1
+		label.bind(size=label.setter("text_size"))
+
 	def _apply_responsive_layout(self, *_args):
 		if not self._surface:
 			return
@@ -379,8 +405,9 @@ class RcCarControllerApp(App):
 			return
 
 		scale = min(width / 1280.0, height / 720.0)
-		compact_scale = min(max(scale, 0.78), 1.08)
-		spacing_scale = min(max(scale, 0.82), 1.0)
+		compact_scale = min(max(scale, 0.86), 1.06)
+		spacing_scale = min(max(scale, 0.88), 1.04)
+		phone_landscape = width <= 1600 and height <= 900
 
 		self._surface.padding = [dp(12 * spacing_scale)] * 4
 		self._surface.spacing = dp(10 * spacing_scale)
@@ -394,28 +421,51 @@ class RcCarControllerApp(App):
 			self._bottom_panel.spacing = dp(8 * spacing_scale)
 			self._bottom_panel.padding = [dp(10 * spacing_scale)] * 4
 
-		if height < 620:
+		if self._primary_row:
+			self._primary_row.spacing = dp(8 * spacing_scale)
+		if self._aux_row:
+			self._aux_row.spacing = dp(8 * spacing_scale)
+
+		if phone_landscape and height < 620:
 			if self._top_bar:
-				self._top_bar.size_hint_y = 0.09
+				self._top_bar.size_hint_y = 0.1
 			if self._main_row:
-				self._main_row.size_hint_y = 0.64
+				self._main_row.size_hint_y = 0.56
 			if self._bottom_panel:
-				self._bottom_panel.size_hint_y = 0.27
+				self._bottom_panel.size_hint_y = 0.34
+			if self._left_controls:
+				self._left_controls.size_hint_x = 0.32
+			if self._center_column:
+				self._center_column.size_hint_x = 0.36
+			if self._right_controls:
+				self._right_controls.size_hint_x = 0.32
 			if self._center_status_card:
 				self._center_status_card.size_hint = (1, 0.6)
 			if self._encoder_card:
 				self._encoder_card.size_hint = (1, 0.4)
 		else:
 			if self._top_bar:
-				self._top_bar.size_hint_y = 0.1
+				self._top_bar.size_hint_y = 0.11
 			if self._main_row:
-				self._main_row.size_hint_y = 0.62
+				self._main_row.size_hint_y = 0.59
 			if self._bottom_panel:
-				self._bottom_panel.size_hint_y = 0.28
+				self._bottom_panel.size_hint_y = 0.31
+			if self._left_controls:
+				self._left_controls.size_hint_x = 0.33
+			if self._center_column:
+				self._center_column.size_hint_x = 0.34
+			if self._right_controls:
+				self._right_controls.size_hint_x = 0.33
 			if self._center_status_card:
 				self._center_status_card.size_hint = (1, 0.64)
 			if self._encoder_card:
 				self._encoder_card.size_hint = (1, 0.36)
+
+		button_scale = min(max(compact_scale, 0.9), 1.08)
+		for btn in self._primary_buttons:
+			btn.font_size = sp(13 * button_scale)
+		for btn in self._aux_buttons:
+			btn.font_size = sp(12 * button_scale)
 
 		for widget, base_size in self._responsive_fonts:
 			widget.font_size = sp(base_size * compact_scale)
